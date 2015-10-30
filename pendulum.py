@@ -4,190 +4,149 @@ import argparse
 import os
 import sys
 import itertools
+import json
 import matplotlib.pyplot as plt
 
-def locally_linear_regression(X,y,xeval,K):
+# Transition mean
+# Independent transition variance
+# Impute transition means
+# Value iteration
+#def value_iteration(T, R_sa, 
+
+def save_array(A,fn):
+    with open(fn, 'w') as f:
+        json.dump(A.tolist(), f, allow_nan = True, indent=4)
+        #for i in range(A.shape[0]):
+        #    for j in range(A.shape[1]):
+        #        f.write("{:4d} {:4d} [{:4d} {:4d}] [{:4d} {:4d}]\n".format(i,j,A[i,j,0,0],A[i,j,0,1],A[i,j,1,0],A[i,j,1,1]))
+
+def load_array(fn):
+    with open(fn,"r") as f:
+        A = np.array(json.load(f))
+    
+
+def sorted_uniq_vals(c):
+    return sorted(set(c))
+
+def make_vocab(t):
+    uniq_by_col = [sorted_uniq_vals(t[:,i]) for i in range(t.shape[1])]
+    all_combinations = itertools.product(*uniq_by_col)
+    vocab = {t : i for i,t in enumerate(all_combinations)}
+    return vocab
+
+def scored_neighbor_indices(X,xv,k,kernel):
+    # Find k nearest neighbors
+    ninds = np.argpartition(np.abs((X-xv).sum(axis=1)),k)[:k]
+    scores = kernel(X[ninds],xv)
+    return (ninds,scores)
+
+def fix_circular_discontinuity(vals,maxval):
+    while(max(vals) - min(vals) > (min(vals)+maxval - max(vals))):
+        source = min(vals)
+        target = min(vals) + maxval
+        vals = [k if k!=source else target for k in vals]
+    return vals
+
+def locally_linear_regression(X,y,xeval,k,kernel,iscirc,maxval):
+    assert len(y.shape)==1
     print("Xeval shape={}".format(xeval.shape))
-    yeval = np.zeros((xeval.shape[0],y.shape[1]))
+    yeval = np.zeros((xeval.shape[0]))
     for i,xv in enumerate(xeval):
         print "\r   {}".format(i),
-        kall = K(X,xv)
-        I = np.argpartition(kall,-10)[-10:]
-        ksub,Xsub,ysub = (kall[I],X[I],y[I])
+        ninds,ksub = scored_neighbor_indices(X,xv,k,kernel)
+        Xsub,ysub = (X[ninds],y[ninds])
         Xsub = np.hstack((Xsub.copy(),np.ones((Xsub.shape[0],1))))
+        if iscirc:
+            ysub = np.array(fix_circular_discontinuity(list(ysub)))
         # Weighted linear regression is equivalent to reweighting the inputs/outputs
         Xsubw = Xsub * np.sqrt(ksub)[:,None]
-        ysubw = ysub * np.sqrt(ksub)[:,None]
+        ysubw = ysub * np.sqrt(ksub)
         c = np.linalg.lstsq(Xsubw,ysubw)[0]
         xv = np.concatenate((xv,[1.0]))
         yeval[i] = xv.dot(c)
     return yeval
+
+# iscirc denotes whether the first and last state values are identified
+# These cases are handled specially
+def compute_mean_int_tuple(vals, iscirc, maxvals):
+    means = []
+    for i in range(len(vals[0])):
+        ivals = [v[i] for v in vals]
+        if iscirc[i]:
+            while(max(ivals) - min(ivals) > (min(ivals)+maxvals[i] - max(ivals))):
+                source = min(ivals)
+                target = min(ivals) + maxvals[i]
+                ivals = [k if k!=source else target for k in ivals]
+        means.append(int(round(float(sum(ivals))/float(len(ivals)))) % (maxvals[i]+1))
+    return tuple(means)
         
 
-def global_linear_regression(X,y,Xeval,deg):
-    def expand_basis(Xorig):
-        return np.hstack([Xorig**k for k in range(1,deg+1)] + [np.ones((Xorig.shape[0],1))])
-    assert(deg <= 4)
-    Xaug = expand_basis(X)
-    Xevalaug = expand_basis(Xeval)
+def make_incomplete_transition_and_reward_tables(instates, outstates, actions, rewards, statecirc, statemaxvals):
+    isv = make_vocab(instates)
+    osv = make_vocab(instates)
+    av = make_vocab(actions)
+    assert(isv == osv)
 
-    coeff, resid, _, _ = np.linalg.lstsq(Xaug, y)
+    lens = tuple(len(set(instates[:,i])) for i in range(instates.shape[1]))
+    assert(len(statemaxvals) == len(statecirc))
 
-    ypred = Xaug.dot(coeff)
-    resid_computed = np.mean((ypred-y)**2, axis=0)
+    print("Statemaxvals={}   Statecirc={}".format(statemaxvals,statecirc))
 
-    print("Coeff = {}   Resid = {}  Resid_Computed = {}".format(coeff, resid, resid_computed))
-    yeval = Xevalaug.dot(coeff)
-    return yeval
+    # Calculate mean state values
+    H = {}
+    for i in range(instates.shape[0]):
+        key = tuple(list(instates[i]) + list(actions[i]))
+        val = tuple(outstates[i])
+        H.setdefault(key,[]).append(val)
+    
+    T = np.empty(lens + (len(av),instates.shape[1]), dtype=np.int32)
+    T[:] = -1
+    for key,vals in H.iteritems():
+        meanval = compute_mean_int_tuple(vals,statecirc,statemaxvals)
+        skey,akey = tuple(key[:instates.shape[1]]),tuple(key[instates.shape[1]:])
+        #sind = isv[skey]
+        aind = av[akey]
+        #meansind = isv[meanval]
+        #print("Key={}  KeyS={}  KeyA={}  Meanval={}  MeanS={}".format(key,sind,aind,meanval,meansind))
+        T[skey + (aind,)] = meanval
+
+    return T
 
 
-def plot(x1,x2,y):
-    uniq_x2 = sorted(set(x2))
-    colors = np.linspace(0,1,num=len(uniq_x2))
 
-    for v,c in zip(uniq_x2, colors):
-        cstr = str(c)
-        mask = x2==v
-        x1sub = x1[mask]
-        ysub = y[mask]
-        plt.plot(x1sub,ysub,color=cstr,marker=".",ls="None")
-    plt.show()
-        
-def gaussian_kernel(tau):
-    return lambda X,v: np.exp(-1.0 * np.sum((X - v)**2,axis=1)/(2*tau**2))
+def make_bool(s):
+    return (s.lower() in ["true","yes","1","t","y"])
 
-
-def integerize_columns(table, index_multiple_pairs):
-    for index,mult in index_multiple_pairs:
-        table[:,index] = np.vectorize(lambda x: int(round(x)))(table[:,index] / mult)
-    table = table.astype(np.int32)
-    table = table - table.min(axis=0)
-    return table
-
-def integerize_table():
-    modes = ["local_linear","global_linear"]
-
+def learn_policy():
     parser = argparse.ArgumentParser()
     parser.add_argument("-csv", type=str, required=True, help="Input CSV file")
     parser.add_argument("-instatecols", type=int, nargs="+", required=True)
     parser.add_argument("-outstatecols", type=int, nargs="+", required=True)
     parser.add_argument("-actioncol", type=int, required=True)
-    parser.add_argument("-rewardcols", type=int, nargs="+", required=True)
-    parser.add_argument("-output_csv", type=str, required=True, help="Input CSV file")
+    parser.add_argument("-rewardcol", type=int, required=True)
+    parser.add_argument("-statecirc", type=make_bool, nargs="+", required=True)
+    parser.add_argument("-outprefix", type=str, required=True)
     
     args = parser.parse_args()
 
-    table = np.loadtxt(args.csv, delimiter=",",skiprows=1)
+    print(args.statecirc)
+    assert(len(args.instatecols) == len(args.outstatecols))
+    assert(len(args.instatecols) == len(args.statecirc))
 
-    #.0125664 1 4 .04 2 5
-    a=.0125664
-    b=.04
-    pairs = [(0,a),(1,b)]
+    table = np.loadtxt(args.csv, dtype=np.int32)
 
     instates = table[:,args.instatecols]
     actions = table[:,args.actioncol][:,None]
     outstates = table[:,args.outstatecols]
-    rewards = table[:,args.rewardcols]
+    rewards = table[:,args.rewardcol][:,None]
 
-    instates = integerize_columns(instates, pairs)
-    outstates = integerize_columns(outstates, pairs)
-    table = np.hstack([instates, actions.astype(np.int32), outstates, rewards.astype(np.int32)])
+    statemaxvals = list(instates.max(axis=0))
 
-    np.savetxt(args.output_csv, table, fmt="%d")
+    T = make_incomplete_transition_and_reward_tables(instates, outstates, actions, rewards, args.statecirc)
 
-def main():
-    modes = ["local_linear","global_linear"]
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-csv", type=str, required=True, help="Input CSV file")
-    parser.add_argument("-output_dir", type=str, required=True, help="Output directory")
-    parser.add_argument("-output_prefix", type=str, required=True, help="Output file prefix")
-    parser.add_argument("-instatecols", type=int, nargs="+", required=True)
-    parser.add_argument("-outstatecols", type=int, nargs="+", required=True)
-    parser.add_argument("-actioncol", type=int, required=True)
-    parser.add_argument("-rewardcols", type=int, nargs="+", required=True)
-    parser.add_argument("-mode", type=str, required=True, help="Mode. One of {}".format(modes))
-    parser.add_argument("-tau", type=float, default=0.1)
-    
-    args = parser.parse_args()
-
-    table = np.loadtxt(args.csv, delimiter=",",skiprows=1)
-
-    #.0125664 1 4 .04 2 5
-    a=.0125664
-    b=.04
-    pairs = [(0,a),(3,a),(1,b),(4,b)]
-
-    
-
-    instates = table[:,args.instatecols]
-    outstates = table[:,args.outstatecols]
-    actions = table[:,args.actioncol]
-    rewards = table[:,args.rewardcols]
-
-
-    uniq_state_lists = [list(enumerate(sorted(set(instates[:,i])))) for i in range(instates.shape[1])]
-    uniq_actions = list(enumerate(sorted(set(actions))))
-    all_states_list = list(itertools.product(*uniq_state_lists))
-    S = len(all_states_list)
-
-    all_states_as_ids = np.array([[pair[0] for pair in state] for state in all_states_list])
-    all_states_as_vals = np.array([[pair[1] for pair in state] for state in all_states_list])
-
-    all_conditions_ids = np.vstack([all_states_as_ids] * len(uniq_actions))
-    all_conditions_vals = np.vstack([np.hstack([all_states_as_vals, np.ones((S,1)) * pair[1]]) for pair in uniq_actions])
-
-    if args.mode == "local_linear_OLD":
-        print("Lists: {}".format(uniq_state_lists))
-
-        output_matrices = []
-        for i,val in uniq_actions:
-            mask = actions==val
-            actioncol = val * np.ones((all_states_as_vals.shape[0],1))
-            yeval = locally_linear_regression(instates[mask], outstates[mask,0], all_states_as_vals, gaussian_kernel(args.tau))
-            output_matrix = np.hstack((all_states_as_ids,all_states_as_vals,action_col,yeval))
-            output_matrices.append(output_matrix)
-        output_matrix = np.vstack(output_matrices)
-    elif args.mode == "local_linear":
-        X = np.hstack([instates, actions[:,None]])
-        y = outstates
-        Xeval = all_conditions_vals
-        ypred = locally_linear_regression(X, y, Xeval, gaussian_kernel(args.tau))
-        output_matrix = np.hstack((Xeval,ypred))
-
-    elif args.mode == "global_linear":
-        X = np.hstack([instates, actions[:,None]])
-        y = outstates
-        Xeval = all_conditions_vals
-        ypred = global_linear_regression(X, y, Xeval, 1)
-        output_matrix = np.hstack((Xeval,ypred))
-        
-    else:
-        raise Exception("Unknown mode: {}".format(args.mode))
-        
-
-    np.savetxt("{}/{}.predicted".format(args.output_dir, args.output_prefix), output_matrix, fmt="%.4f")
-
-
-def test_regression():
-    #def locally_linear_regression(X,y,xeval,K):
-    X = np.linspace(0,100,num=50)[:,None]
-    ytrue = (X**2).flatten()
-    yerr = np.random.normal(0,400,ytrue.shape)
-    yobs = ytrue + yerr
-    plt.plot(X,yobs,color='b',marker="x", ls="None")
-    xeval = np.linspace(0,100,num=300)[:,None]
-
-    colors = np.linspace(0,.7,num=10)
-    kernels = np.linspace(.1,10,num=10)
-
-    for c,k in zip(colors,kernels):
-        yeval = locally_linear_regression(X, yobs, xeval, gaussian_kernel(k))
-        plt.plot(xeval,yeval,color=str(c),marker=".")
-    plt.show()
+    #np.savetxt("{}.t_partial".format(args.outprefix), T, fmt="%d")
+    save_array(T, "{}.t_partial".format(args.outprefix))
 
 if __name__ == "__main__": 
-    #main()
-    #test_regression()
-    integerize_table()
+    learn_policy()
 
