@@ -5,9 +5,14 @@ import itertools
 def sorted_uniq_vals(c):
     return sorted(set(c))
 
-def make_row_voc(t):
+def reverse_each_tuple_in_list(l):
+    return [tuple(reversed(i)) for i in l]
+
+def make_row_voc(t,aa228_sorting=False):
     uniq_by_col = [sorted_uniq_vals(t[:,i]) for i in range(t.shape[1])]
     all_combinations = list(itertools.product(*uniq_by_col))
+    if aa228_sorting:
+        all_combinations = reverse_each_tuple_in_list(sorted(reverse_each_tuple_in_list(all_combinations)))
     vocab = {t : i for i,t in enumerate(all_combinations)}
     return vocab,all_combinations
 
@@ -43,7 +48,7 @@ def one_step_policy_iteration(p, T, R, gamma):
     
     Up = np.linalg.solve(np.eye(NS)-gamma*Tp, Rp)
     
-    Usa = R + gamma * np.dot(T,Rp)
+    Usa = R + gamma * np.dot(T,Up)
     assert(Usa.shape == (NS,NA))
     
     p_new = np.argmax(Usa,axis=1)
@@ -81,8 +86,8 @@ def learn_policy():
     outstates = table[:,args.outstatecols]
     rewards = table[:,args.rewardcol][:,None]
 
-    statevoc,i_to_state = make_row_voc(instates)
-    outstatevoc,i_to_ostate = make_row_voc(outstates)
+    statevoc,i_to_state = make_row_voc(instates,aa228_sorting=True)
+    outstatevoc,i_to_ostate = make_row_voc(outstates,aa228_sorting=True)
     assert(statevoc == outstatevoc)
     actionvoc,i_to_action = make_row_voc(actions)
 
