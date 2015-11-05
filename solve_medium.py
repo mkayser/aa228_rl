@@ -6,6 +6,7 @@ import sys
 import itertools
 import json
 import pickle
+import time
 import matplotlib.pyplot as plt
 
 # Transition mean
@@ -337,10 +338,11 @@ def locally_linear_regression(X,y,xeval,k,kernel,iscirc,maxval,debug_mode=False)
     yeval = np.zeros((xeval.shape[0]))
     err = np.empty((xeval.shape[0],3))
     err[...] = np.nan
+    start = time.time()
     
     for i,xv in enumerate(xeval):
         if i%10000 == 0:
-            print "   {}".format(i)
+            print "   {}  ({} s)".format(i,time.time()-start)
         #if i%80!=1:
         #    continue
         ninds,ksub = scored_neighbor_indices(X,xv,k,kernel)
