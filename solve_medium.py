@@ -341,8 +341,8 @@ def locally_linear_regression(X,y,xeval,k,kernel,iscirc,maxval,debug_mode=False)
     for i,xv in enumerate(xeval):
         if i%10000 == 0:
             print "   {}".format(i)
-        if i%80!=1:
-            continue
+        #if i%80!=1:
+        #    continue
         ninds,ksub = scored_neighbor_indices(X,xv,k,kernel)
         Xsub,ysub = (X[ninds],y[ninds])
         Xsub = np.hstack((Xsub.copy(),np.ones((Xsub.shape[0],1))))
