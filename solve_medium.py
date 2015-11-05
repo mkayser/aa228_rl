@@ -329,7 +329,7 @@ def policy_iteration(p0, T, R, gamma, kinner, kouter):
         ps.append(p)
         if np.array_equal(pPrev,p):
             break
-    return (p,ps)
+    return (p,np.vstack(ps).T)
 
 def locally_linear_regression(X,y,xeval,k,kernel,iscirc,maxval,debug_mode=False):
     assert len(y.shape)==1
@@ -418,6 +418,8 @@ def learn_policy():
         for i in (p):
             action = csv.i_to_action[i][0]
             fout.write("{}\n".format(action))
+
+    np.savetxt("{}.policy_history".format(args.outprefix), phist, fmt="%d")
     
 
     #np.savetxt("{}.t_partial".format(args.outprefix), T, fmt="%d")
